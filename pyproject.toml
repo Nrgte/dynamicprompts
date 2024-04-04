@@ -3,12 +3,12 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "dynamicprompts"
+name = "dynamicprompts_nrgte_fork"
 dynamic = ["version"]
 description = "Dynamic prompts templating library for Stable Diffusion"
-homepage = "https://github.com/adieyal/dynamicprompts"
+homepage = "https://github.com/Nrgte/dynamicprompts"
 authors = [
-    { name = "Adi Eyal", email = "adi@clearforest.io" }
+    { name = "Nrgte", email = "-" }
 ]
 license = "MIT"
 readme = "README.md"
