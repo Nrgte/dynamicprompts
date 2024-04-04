@@ -6,7 +6,7 @@
 ### Installation
 
 1. Delete the existing folder: venv\Lib\site-packages\dynamicprompts
-2. Copy the content of the src folder into venv\Lib\site-packages 
+2. Copy the content of the src\dynamicprompts_ng folder into venv\Lib\site-packages\dynamicprompts
 
 
 ### Regex variable replacement
