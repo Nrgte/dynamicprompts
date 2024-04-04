@@ -12,3 +12,5 @@
 ### Regex variable replacement
 
 $${"${variable_name}", "regex_search_string", "replacement_string"}
+
+replacement_string cannot be an empty string. It needs 1 character at least.
