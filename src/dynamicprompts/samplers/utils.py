@@ -2,16 +2,10 @@ from __future__ import annotations
 
 import logging
 
-from dynamicprompts.commands import (
-    Command,
-    VariantCommand,
-    VariantOption,
-    WildcardCommand,
-)
+from dynamicprompts.commands import VariantCommand, VariantOption, WildcardCommand
 from dynamicprompts.parser.parse import parse
 from dynamicprompts.sampling_context import SamplingContext
-from dynamicprompts.sampling_result import SamplingResult
-from dynamicprompts.types import ResultGen
+from dynamicprompts.types import StringGen
 
 logger = logging.getLogger(__name__)
 
@@ -24,14 +18,12 @@ def wildcard_to_variant(
     max_bound=1,
     separator=",",
 ) -> VariantCommand:
-    wildcard = next(iter(context.sample_prompts(command.wildcard, 1))).text
-    values = context.wildcard_manager.get_values(wildcard)
+    values = context.wildcard_manager.get_all_values(command.wildcard)
     min_bound = min(min_bound, len(values))
     max_bound = min(max_bound, len(values))
 
     variant_options = [
-        VariantOption(parse(v, parser_config=context.parser_config))
-        for v in values.iterate_string_values_weighted()
+        VariantOption(parse(v, parser_config=context.parser_config)) for v in values
     ]
 
     wildcard_variant = VariantCommand(
@@ -47,16 +39,11 @@ def wildcard_to_variant(
 def get_wildcard_not_found_fallback(
     command: WildcardCommand,
     context: SamplingContext,
-) -> ResultGen:
+) -> StringGen:
     """
     Logs a warning, then infinitely yields the wrapped wildcard.
     """
-    if isinstance(command.wildcard, Command):
-        wildcard = next(iter(context.sample_prompts(command.wildcard, 1))).text
-    else:
-        wildcard = str(command.wildcard)
-    logger.warning(f"No values found for wildcard {wildcard!r}")
-    wrapped_wildcard = context.wildcard_manager.to_wildcard(wildcard)
-    res = SamplingResult(text=wrapped_wildcard)
+    logger.warning(f"No values found for wildcard {command.wildcard}")
+    wrapped_wildcard = context.wildcard_manager.to_wildcard(command.wildcard)
     while True:
-        yield res
+        yield wrapped_wildcard

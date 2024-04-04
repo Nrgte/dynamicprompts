@@ -6,13 +6,13 @@ from itertools import islice
 from random import Random
 from typing import TYPE_CHECKING, Iterable
 
-from dynamicprompts.commands import Command, LiteralCommand
+from dynamicprompts.commands import Command, LiteralCommand, SequenceCommand
 from dynamicprompts.commands.variable_commands import VariableAssignmentCommand
 from dynamicprompts.constants import DEFAULT_RANDOM
 from dynamicprompts.enums import SamplingMethod
 from dynamicprompts.parser.config import ParserConfig, default_parser_config
-from dynamicprompts.sampling_result import SamplingResult
-from dynamicprompts.types import ResultGen
+from dynamicprompts.types import StringGen
+from dynamicprompts.utils import squash_whitespace
 from dynamicprompts.wildcards import WildcardManager
 
 if TYPE_CHECKING:
@@ -95,7 +95,7 @@ class SamplingContext:
             _variables_being_sampled=self._variables_being_sampled | {variable},
         )
 
-    def generator_from_command(self, command: Command) -> ResultGen:
+    def generator_from_command(self, command: Command) -> StringGen:    
         samp, ctx = self.get_sampler_and_context(command)
         return samp.generator_from_command(command, ctx)
 
@@ -103,7 +103,7 @@ class SamplingContext:
         self,
         prompt: str | Command,
         num_prompts: int | None = None,
-    ) -> Iterable[SamplingResult]:
+    ) -> Iterable[str]:
         """
         Generate prompts from a prompt template.
 
@@ -125,7 +125,7 @@ class SamplingContext:
         gen = self.generator_from_command(command)
 
         if self.ignore_whitespace:
-            gen = (res.whitespace_squashed() for res in gen)
+            gen = (squash_whitespace(p) for p in gen)
 
         if num_prompts is None:
             return gen
@@ -152,26 +152,43 @@ class SamplingContext:
         for command in commands:
             if isinstance(command, VariableAssignmentCommand):
                 new_variables[command.name] = self.process_variable_assignment(command)
+                if new_variables:
+                    for key, value in new_variables.items():
+                        # self.variables[key] = value
+                        self.set_variable(key, value)
+                    # print (f"Variable {command.name} is set to: {self.variables[command.name]}")
             else:
+                # print (f"new command = {command}")
                 new_commands.append(command)
         if new_variables:
-            return new_commands, self.with_variables(new_variables)
+            context = self.with_variables(new_variables)
+            return new_commands, context
         return (new_commands, self)
 
     def process_variable_assignment(
         self,
         command: VariableAssignmentCommand,
     ) -> Command:
-        if not command.overwrite and command.name in self.variables:
-            return self.variables[command.name]
-        if command.immediate:
+        if command.immediate:         
             if isinstance(command.value, LiteralCommand):
                 # Optimization: if the variable assignment is a literal, just use that
                 return command.value
             # Sample the variable assignment command to get the value
             return LiteralCommand(
-                str(
-                    next(self.generator_from_command(command.value)),
-                ),  # TODO: sus str cast from result?
+                next(self.generator_from_command(command.value)),
             )
         return command.value
+
+    def reset_variables(self):
+        self.variables.clear()
+
+    def get_variables(self) -> dict[str, Command]:
+        return self.variables
+
+
+    def set_variable(self, v_name: str, command: Command):
+        self.variables[v_name] = command
+
+    def set_variables(self, varis: dict[str, Command]):
+        for key, value in varis.items():
+            self.set_variable(key, value)

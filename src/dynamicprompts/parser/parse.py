@@ -23,7 +23,6 @@ A parser for a prompt grammar which is roughly as follows:
 <variant_literal_sequence> ::= <variant_literal>+
 <variable_assignment> ::= "${" <variable_name> "=" <variant_chunk> "}"
 <variable_access> ::= "${" <variable_name> (":" <variant_chunk>)? "}"
-<wrap_command> ::= "%{" <variant_chunk> "$$" <variant_chunk> "}"
 
 Note that whitespace is preserved in case it is significant to the user.
 """
@@ -40,12 +39,12 @@ import pyparsing as pp
 from dynamicprompts.commands import (
     Command,
     LiteralCommand,
+    ReplaceCommand,
     SamplingMethod,
     SequenceCommand,
     VariantCommand,
     VariantOption,
     WildcardCommand,
-    WrapCommand,
 )
 from dynamicprompts.commands.variable_commands import (
     VariableAccessCommand,
@@ -64,8 +63,6 @@ sampler_combinatorial = pp.Char("!")
 sampler_cyclical = pp.Char("@")
 sampler_symbol = sampler_random | sampler_combinatorial | sampler_cyclical
 
-variant_delim = pp.Suppress("$$")
-
 OPT_WS = pp.Opt(pp.White())  # Optional whitespace
 
 var_name = pp.Word(pp.alphas + "_-", pp.alphanums + "_-")
@@ -79,6 +76,7 @@ sampler_symbol_to_method = {
 
 def _configure_range() -> pp.ParserElement:
     hyphen = pp.Suppress("-")
+    variant_delim = pp.Suppress("$$")
 
     # Exclude:
     # - $, which is used to indicate the end of the separator definition i.e. {1$$ and $$X|Y|Z}
@@ -109,21 +107,21 @@ def _configure_range() -> pp.ParserElement:
 
 def _configure_wildcard(
     parser_config: ParserConfig,
-    prompt: pp.ParserElement,
 ) -> pp.ParserElement:
+    wildcard_path_re = r"((?!" + re.escape(parser_config.wildcard_wrap) + r")[^({}#])+"
+    wildcard_path = pp.Regex(wildcard_path_re)("path").leave_whitespace()
     wildcard_enclosure = pp.Suppress(parser_config.wildcard_wrap)
     wildcard_variable_spec = (
         OPT_WS
-        + pp.Literal("(")
+        + pp.Suppress("(")
         + pp.Regex(r"[^)]+")("variable_spec")
         + pp.Suppress(")")
     )
-    wc_path = prompt()("path")
 
     wildcard = (
         wildcard_enclosure
         + pp.Opt(sampler_symbol)("sampling_method")
-        + wc_path
+        + wildcard_path
         + pp.Opt(wildcard_variable_spec)
         + wildcard_enclosure
     )
@@ -131,32 +129,15 @@ def _configure_wildcard(
     return wildcard("wildcard").leave_whitespace()
 
 
-def _configure_wildcard_path(
-    parser_config: ParserConfig,
-    variable_ref: pp.ParserElement,
-) -> pp.ParserElement:
-    wildcard_path_literal_re = (
-        r"((?!" + re.escape(parser_config.wildcard_wrap) + r")[^(${}#])+"
-    )
-    wildcard_path = pp.Regex(wildcard_path_literal_re).leave_whitespace()
-    return pp.Combine(pp.OneOrMore(variable_ref | wildcard_path))("path")
-
-
 def _configure_literal_sequence(
     parser_config: ParserConfig,
     is_variant_literal: bool = False,
-    is_wildcard_literal: bool = False,
 ) -> pp.ParserElement:
     # Characters that are not allowed in a literal
     # - { denotes the start of a variant (or whatever variant_start is set to  )
     # - # denotes the start of a comment
     # - $ denotes the start of a variable command (or whatever variable_start is set to)
-    # - % denotes the start of a wrap command (or whatever wrap_start is set to)
-    non_literal_chars = (
-        rf"#{parser_config.variant_start}"
-        rf"{parser_config.variable_start}"
-        rf"{parser_config.wrap_start}"
-    )
+    non_literal_chars = rf"#{parser_config.replace_start}{parser_config.variant_start}{parser_config.variable_start}"
 
     if is_variant_literal:
         # Inside a variant the following characters are also not allowed
@@ -164,13 +145,6 @@ def _configure_literal_sequence(
         # - | denotes the end of a variant option
         # - $ denotes the end of a bound expression
         non_literal_chars += rf"|${parser_config.variant_end}"
-
-    if is_wildcard_literal:
-        # Inside a wildcard the following characters are also not allowed
-        # - ( denotes the beginning of wildcard variable parameters
-        # - ) denotes the end of wildcard variable parameters
-        non_literal_chars += r")("
-
     non_literal_chars = re.escape(non_literal_chars)
     literal = pp.Regex(
         rf"((?!{re.escape(parser_config.wildcard_wrap)})[^{non_literal_chars}])+",
@@ -243,7 +217,6 @@ def _configure_variable_assignment(
         + OPT_WS
         + var_name("name")
         + OPT_WS
-        + pp.Opt(pp.Literal("?"))("preserve_existing_value")
         + pp.Literal("=")
         + pp.Opt(pp.Literal("!"))("immediate")
         + OPT_WS
@@ -253,22 +226,26 @@ def _configure_variable_assignment(
     )
     return variable_assignment.leave_whitespace()
 
-
-def _configure_wrap_command(
+def _configure_variable_string_replace(
     parser_config: ParserConfig,
     prompt: pp.ParserElement,
 ) -> pp.ParserElement:
-    wrap_command = pp.Group(
-        pp.Suppress(parser_config.wrap_start)
+    stringReplace = pp.Group(
+        pp.Suppress(parser_config.replace_start)
         + OPT_WS
-        + prompt()("wrapper")
+        + pp.QuotedString('"')("var")
         + OPT_WS
-        + variant_delim
+        + pp.Literal(",")
         + OPT_WS
-        + prompt()("inner")
-        + pp.Suppress(parser_config.wrap_end),
+        + pp.QuotedString('"')("src")
+        + OPT_WS
+        + pp.Literal(",")
+        + OPT_WS
+        + pp.QuotedString('"')("dest")
+        + OPT_WS
+        + pp.Suppress(parser_config.replace_end)
     )
-    return wrap_command.leave_whitespace()
+    return stringReplace.leave_whitespace()
 
 
 def _parse_literal_command(parse_result: pp.ParseResults) -> LiteralCommand:
@@ -360,9 +337,7 @@ def _parse_wildcard_command(
     else:
         variables = {}
 
-    assert isinstance(wildcard, (Command, str))
-    if isinstance(wildcard, LiteralCommand):
-        wildcard = wildcard.literal
+    assert isinstance(wildcard, str)
     return WildcardCommand(
         wildcard=wildcard,
         sampling_method=sampling_method,
@@ -400,18 +375,6 @@ def _parse_variable_access_command(
     return VariableAccessCommand(name=parts["name"], default=parts.get("default"))
 
 
-def _parse_wildcard_variable_access_command(
-    parse_result: pp.ParseResults,
-) -> VariableAccessCommand:
-    parts = parse_result[0].as_dict()
-    name = parts["name"]
-    default = parts.get("default") or LiteralCommand(name)
-    return VariableAccessCommand(
-        name=name,
-        default=LiteralCommand(default.literal.strip()),
-    )
-
-
 def _parse_variable_assignment_command(
     parse_result: pp.ParseResults,
 ) -> VariableAssignmentCommand:
@@ -419,19 +382,19 @@ def _parse_variable_assignment_command(
     return VariableAssignmentCommand(
         name=parts["name"],
         value=parts["value"],
-        overwrite=("preserve_existing_value" not in parts),
         immediate=("immediate" in parts),
     )
 
-
-def _parse_wrap_command(
+def _parse_variable_string_replace(
     parse_result: pp.ParseResults,
-) -> WrapCommand:
+) -> ReplaceCommand:
     parts = parse_result[0].as_dict()
-    return WrapCommand(
-        inner=parts["inner"],
-        wrapper=parts["wrapper"],
+    command = ReplaceCommand(
+        var=parse(parts["var"]),
+        src=parse(parts["src"]),
+        dest=parse(parts["dest"]),
     )
+    return command
 
 
 def create_parser(
@@ -442,13 +405,13 @@ def create_parser(
 
     prompt = pp.Forward()
     variant_prompt = pp.Forward()
-    wildcard_prompt = pp.Forward()
 
-    variable_access = _configure_variable_access(
+    string_replace = _configure_variable_string_replace(
         parser_config=parser_config,
         prompt=variant_prompt,
     )
-    wildcard_variable_access = _configure_variable_access(
+
+    variable_access = _configure_variable_access(
         parser_config=parser_config,
         prompt=variant_prompt,
     )
@@ -456,19 +419,9 @@ def create_parser(
         parser_config=parser_config,
         prompt=variant_prompt,
     )
-    wrap_command = _configure_wrap_command(
-        parser_config=parser_config,
-        prompt=variant_prompt,
-    )
-    wildcard = _configure_wildcard(
-        parser_config=parser_config,
-        prompt=wildcard_prompt,
-    )
+
+    wildcard = _configure_wildcard(parser_config=parser_config)
     literal_sequence = _configure_literal_sequence(parser_config=parser_config)
-    wildcard_literal_sequence = _configure_literal_sequence(
-        parser_config=parser_config,
-        is_wildcard_literal=True,
-    )
     variant_literal_sequence = _configure_literal_sequence(
         is_variant_literal=True,
         parser_config=parser_config,
@@ -480,46 +433,30 @@ def create_parser(
     )
 
     chunk = (
-        variable_assignment
-        | variable_access
-        | wrap_command
-        | variants
-        | wildcard
-        | literal_sequence
+        string_replace | variable_assignment | variable_access | variants | wildcard | literal_sequence
     )
-    variant_chunk = (
-        variable_access | wrap_command | variants | wildcard | variant_literal_sequence
-    )
-    wildcard_chunk = (
-        wildcard_variable_access
-        | variants
-        | wildcard_literal_sequence
-        | variant_literal_sequence
-    )
+    variant_chunk = variable_access | variants | wildcard | variant_literal_sequence
 
     prompt <<= pp.ZeroOrMore(chunk)("prompt")
     variant_prompt <<= pp.ZeroOrMore(variant_chunk)("prompt")
-    wildcard_prompt <<= pp.OneOrMore(wildcard_chunk, stop_on=pp.Char("("))("prompt")
 
     # Configure comments
     prompt.ignore("#" + pp.restOfLine)
     prompt.ignore("//" + pp.restOfLine)
     prompt.ignore(pp.c_style_comment)
 
+    string_replace.set_parse_action(_parse_variable_string_replace)
+
     wildcard.set_parse_action(
         partial(_parse_wildcard_command, parser_config=parser_config),
     )
     variants.set_parse_action(_parse_variant_command)
     literal_sequence.set_parse_action(_parse_literal_command)
-    wildcard_literal_sequence.set_parse_action(_parse_literal_command)
     variant_literal_sequence.set_parse_action(_parse_literal_command)
     variable_access.set_parse_action(_parse_variable_access_command)
-    wildcard_variable_access.set_parse_action(_parse_wildcard_variable_access_command)
     variable_assignment.set_parse_action(_parse_variable_assignment_command)
     prompt.set_parse_action(_parse_sequence_or_single_command)
     variant_prompt.set_parse_action(_parse_sequence_or_single_command)
-    wrap_command.set_parse_action(_parse_wrap_command)
-    wildcard_prompt.set_parse_action(_parse_sequence_or_single_command)
     return prompt
 
 
@@ -561,6 +498,7 @@ def parse(
     if len(tokens) != 1:
         raise ValueError(f"Could not parse prompt {prompt!r}")
 
+    # print (f"tokens = {tokens}")
     tok = tokens[0]
     assert isinstance(tok, Command)
     return tok

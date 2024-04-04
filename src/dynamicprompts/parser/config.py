@@ -10,8 +10,8 @@ class ParserConfig:
     wildcard_wrap: str = "__"
     variable_start: str = "${"
     variable_end: str = "}"
-    wrap_start: str = "%{"
-    wrap_end: str = "}"
+    replace_start: str = "$${"
+    replace_end: str = "}"
 
 
 default_parser_config = ParserConfig()

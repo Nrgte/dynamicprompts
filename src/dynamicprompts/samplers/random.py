@@ -2,13 +2,11 @@ from __future__ import annotations
 
 import logging
 from random import Random
-from typing import Iterator
 
 from dynamicprompts.commands import (
     Command,
     VariantCommand,
     WildcardCommand,
-    WrapCommand,
 )
 from dynamicprompts.samplers.base import Sampler
 from dynamicprompts.samplers.utils import (
@@ -16,10 +14,8 @@ from dynamicprompts.samplers.utils import (
     wildcard_to_variant,
 )
 from dynamicprompts.sampling_context import SamplingContext
-from dynamicprompts.sampling_result import SamplingResult
-from dynamicprompts.types import ResultGen
+from dynamicprompts.types import StringGen
 from dynamicprompts.utils import choose_without_replacement, rotate_and_join
-from dynamicprompts.wildcards.values import WildcardValues
 
 logger = logging.getLogger(__name__)
 
@@ -52,19 +48,15 @@ class RandomSampler(Sampler):
             command.max_bound,
         )
 
-    def _get_wildcard_choice_generator(
-        self,
-        context: SamplingContext,
-        values: WildcardValues,
-    ) -> Iterator[str]:
-        # Wrapped for ease of testing
-        return values.get_weighted_random_generator(context.rand)
+    def _get_wildcard_choice(self, context: SamplingContext, values: list[str]) -> str:
+        # Wraps choice for ease of testing
+        return context.rand.choice(values)
 
     def _get_variant(
         self,
         command: VariantCommand,
         context: SamplingContext,
-    ) -> ResultGen:
+    ) -> StringGen:
         if len(command.values) == 0:
             return
         elif len(command.values) == 1:
@@ -102,7 +94,7 @@ class RandomSampler(Sampler):
             ]
 
             if len(sub_generators) == 0:
-                yield SamplingResult(text="")
+                yield ""
             else:
                 yield rotate_and_join(
                     sub_generators,
@@ -113,24 +105,14 @@ class RandomSampler(Sampler):
         self,
         command: WildcardCommand,
         context: SamplingContext,
-    ) -> ResultGen:
-        wildcard_path = next(iter(context.sample_prompts(command.wildcard, 1))).text
+    ) -> StringGen:
         context = context.with_variables(command.variables)
-        values = context.wildcard_manager.get_values(wildcard_path)
+        values = context.wildcard_manager.get_all_values(command.wildcard)
 
         if len(values) == 0:
             yield from get_wildcard_not_found_fallback(command, context)
             return
 
-        gen = self._get_wildcard_choice_generator(context, values)
         while True:
-            value = next(gen)
+            value = self._get_wildcard_choice(context, values)
             yield from context.sample_prompts(value, 1)
-
-    def _get_wrap(self, command: WrapCommand, context: SamplingContext) -> ResultGen:
-        wrapper_gen = context.generator_from_command(command.wrapper)
-        inner_gen = context.generator_from_command(command.inner)
-        wrapper_result: SamplingResult
-        inner_result: SamplingResult
-        for wrapper_result, inner_result in zip(wrapper_gen, inner_gen):
-            yield wrapper_result.as_wrapper()(inner_result)

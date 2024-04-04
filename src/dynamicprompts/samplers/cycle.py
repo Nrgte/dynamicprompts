@@ -16,14 +16,13 @@ from dynamicprompts.samplers.utils import (
     wildcard_to_variant,
 )
 from dynamicprompts.sampling_context import SamplingContext
-from dynamicprompts.sampling_result import SamplingResult
-from dynamicprompts.types import ResultGen, to_result_gen
+from dynamicprompts.types import StringGen, to_string_gen
 from dynamicprompts.utils import next_sampler_next_value
 
 logger = logging.getLogger(__name__)
 
 
-def get_arrs(gen: ResultGen, rest_gen: Iterable[list[SamplingResult]]):
+def get_arrs(gen: StringGen, rest_gen: Iterable[list[str]]):
     try:
         for r in rest_gen:
             yield [next(gen)] + r
@@ -34,7 +33,7 @@ def get_arrs(gen: ResultGen, rest_gen: Iterable[list[SamplingResult]]):
 def _get_combination_samples(
     combo: list[Command],
     sampling_context: SamplingContext,
-) -> Generator[list[SamplingResult], None, None]:
+) -> Generator[list[str], None, None]:
     try:
         if len(combo) == 0:
             while True:
@@ -56,7 +55,7 @@ class CyclicalSampler(Sampler):
         self,
         command: VariantCommand,
         sampling_context: SamplingContext,
-    ) -> ResultGen:
+    ) -> StringGen:
         is_wildcard_variant = len(command.values) == 1 and isinstance(
             command.values[0],
             WildcardCommand,
@@ -85,7 +84,7 @@ class CyclicalSampler(Sampler):
 
             combination_samplers = (
                 (
-                    SamplingResult.joined(sample, separator=command.separator)
+                    command.separator.join(sample)
                     for sample in _get_combination_samples(combo, sampling_context)
                 )
                 for combo in combinations
@@ -98,20 +97,15 @@ class CyclicalSampler(Sampler):
         self,
         command: WildcardCommand,
         context: SamplingContext,
-    ) -> ResultGen:
-        # TODO: doesn't support weights
-        wildcard_path = next(iter(context.sample_prompts(command.wildcard, 1))).text
-        wc_values = context.wildcard_manager.get_values(wildcard_path)
+    ) -> StringGen:
+        values = context.wildcard_manager.get_all_values(command.wildcard)
         new_context = context.with_variables(
             command.variables,
         ).with_sampling_method(SamplingMethod.CYCLICAL)
-        if len(wc_values) == 0:
+        if len(values) == 0:
             yield from get_wildcard_not_found_fallback(command, new_context)
             return
 
-        value_samplers = (
-            new_context.sample_prompts(val)
-            for val in wc_values.iterate_string_values_weighted()
-        )
-        value_result_gens = [to_result_gen(val) for val in value_samplers]
-        yield from next_sampler_next_value(value_result_gens)
+        value_samplers = [new_context.sample_prompts(val) for val in values]
+        value_string_gens = [to_string_gen(val) for val in value_samplers]
+        yield from next_sampler_next_value(value_string_gens)

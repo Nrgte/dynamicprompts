@@ -1,2 +1,0 @@
-__colors-warm__
-__colors-cold__

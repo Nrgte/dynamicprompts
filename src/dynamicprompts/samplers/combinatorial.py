@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Iterable, cast
+import typing
+from typing import cast
 
 from dynamicprompts.commands import (
     Command,
@@ -10,7 +11,6 @@ from dynamicprompts.commands import (
     SequenceCommand,
     VariantCommand,
     WildcardCommand,
-    WrapCommand,
 )
 from dynamicprompts.samplers.base import Sampler
 from dynamicprompts.samplers.command_collection import CommandCollection
@@ -19,17 +19,25 @@ from dynamicprompts.samplers.utils import (
     wildcard_to_variant,
 )
 from dynamicprompts.sampling_context import SamplingContext
-from dynamicprompts.sampling_result import SamplingResult
-from dynamicprompts.types import ResultGen
-from dynamicprompts.utils import dedupe
+from dynamicprompts.types import StringGen
 
 logger = logging.getLogger(__name__)
+
+
+def _dedupe(arr: list[str]) -> tuple[str, ...]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in arr:
+        if item not in seen:
+            seen.add(item)
+            result.append(item)
+    return tuple(result)
 
 
 def _combo_to_prompt(
     sampling_context: SamplingContext,
     combo: list[Command],
-) -> Iterable[list[SamplingResult]]:
+) -> typing.Iterable[list[str]]:
     if len(combo) == 0:
         yield []
         return
@@ -54,7 +62,7 @@ class CombinatorialSampler(Sampler):
         self,
         command: SequenceCommand,
         context: SamplingContext,
-    ) -> ResultGen:
+    ) -> StringGen:
         tokens, context = context.process_variable_assignments(command.tokens)
         non_combo_commands = [
             c for c in tokens if c.sampling_method != SamplingMethod.COMBINATORIAL
@@ -75,7 +83,7 @@ class CombinatorialSampler(Sampler):
             ),  # sentinel 2
         ]
 
-        def get_sequence(commands: list[Command]) -> Iterable[list[SamplingResult]]:
+        def get_sequence(commands: list[Command]) -> typing.Iterable[list[str]]:
             if len(commands) == 0:
                 yield []
             else:
@@ -93,14 +101,16 @@ class CombinatorialSampler(Sampler):
                         for rest_vals in get_sequence(rest):
                             yield [first_val] + rest_vals
 
-        for result_arr in get_sequence(augmented_tokens):
-            yield SamplingResult.joined(result_arr, separator=command.separator)
+        word_arrays = get_sequence(augmented_tokens)
+        for word_arr in word_arrays:
+            prompt = command.separator.join(word_arr)
+            yield prompt.strip(command.separator)
 
     def _get_variant(
         self,
         variant_command: VariantCommand,
         context: SamplingContext,
-    ) -> ResultGen:
+    ) -> StringGen:
         if len(variant_command.variants) == 0:
             return
 
@@ -128,30 +138,24 @@ class CombinatorialSampler(Sampler):
             ):
                 for combo in variant_command.get_value_combinations(bound):
                     for prompt_arr in _combo_to_prompt(context, combo):
-                        deduped_arr = dedupe(prompt_arr, key=lambda r: r.dedupe_key)
+                        deduped_arr = _dedupe(prompt_arr)
                         correct_size = len(deduped_arr) == bound
                         if correct_size and deduped_arr not in seen:
                             seen.add(deduped_arr)
-                            yield SamplingResult.joined(
-                                deduped_arr,
-                                separator=variant_command.separator,
-                            )
+                            yield variant_command.separator.join(deduped_arr)
 
     def _get_wildcard(
         self,
         command: WildcardCommand,
         context: SamplingContext,
-    ) -> ResultGen:
-        # TODO: doesn't support weights
-        wildcard_path = next(iter(context.sample_prompts(command.wildcard, 1))).text
+    ) -> StringGen:
         context = context.with_variables(command.variables)
-        values = context.wildcard_manager.get_values(wildcard_path)
-
+        values = context.wildcard_manager.get_all_values(command.wildcard)
         if not values:
             yield from get_wildcard_not_found_fallback(command, context)
             return
 
-        for val in values.iterate_string_values_weighted():
+        for val in values:
             # Parse and generate prompts from wildcard value
             yield from context.sample_prompts(val)
 
@@ -159,11 +163,5 @@ class CombinatorialSampler(Sampler):
         self,
         command: LiteralCommand,
         context: SamplingContext,
-    ) -> ResultGen:
-        yield SamplingResult(text=command.literal)
-
-    def _get_wrap(self, command: WrapCommand, context: SamplingContext) -> ResultGen:
-        for wrapper_result in context.sample_prompts(command.wrapper):
-            wrap = wrapper_result.as_wrapper()
-            for inner in context.sample_prompts(command.inner):
-                yield wrap(inner)
+    ) -> StringGen:
+        yield command.literal
