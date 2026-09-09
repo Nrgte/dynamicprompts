@@ -1,59 +1,21 @@
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
 [project]
-name = "dynamicprompts_ng"
-dynamic = ["version"]
-description = "Dynamic prompts templating library for Stable Diffusion"
-homepage = "https://github.com/Nrgte/dynamicprompts"
-authors = [
-    { name = "Nrgte", email = "bla@bla.com" }
-]
-license = "MIT"
-readme = "README.md"
-keywords = ["stable diffusion", "prompt engineering", "automatic1111", "text2img"]
-requires-python = ">=3.8"
-classifiers = [
-    "Development Status :: 4 - Beta",
-    "Intended Audience :: Developers",
-    "Intended Audience :: Information Technology",
-    "License :: OSI Approved :: MIT License",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Topic :: Text Processing"
-]
 dependencies = [
-    "pyparsing~=3.0",
-    "jinja2~=3.1",
+    "send2trash~=1.8",
 ]
-
-[project.optional-dependencies]
-attentiongrabber = []  # empty list for backwards compatibility (no "no extra" warnings)
-magicprompt = ["transformers[torch]<5"]
-feelinglucky = ["requests<3"]
-yaml = ["pyyaml<7"]
-dev = [
-    "pytest-cov~=4.0",
-    "pytest-lazy-fixture~=0.6",
-    "pytest~=7.2",
-]
-
-[tool.hatch.version]
-path = "src/dynamicprompts_ng/__init__.py"
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+minversion = "7.0"
+pythonpath = [
+    ".",
+    "lib",
+]
+addopts = "--ignore=collections"
 markers = [
-    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+	"slow"
 ]
 
 [tool.ruff]
-target-version = "py38"
-
-[tool.ruff.lint]
+target-version = "py310"
 select = [
     "B",
     "C",
@@ -62,38 +24,21 @@ select = [
     "F",
     "I",
     "UP",
-    "TID252",
-    "T2",
 ]
 ignore = [
-    "B007",
-    "B028", # explicit stacklevel
-    "B905",
     "C901", # Complexity
     "E501", # Line length
+    "B905", # zip(..., strict=True)
 ]
 unfixable = [
-    "T2",  # don't automatically remove prints
-    "F841",  # don't remove seemingly unused locals
+    "B007", # Loop control variable not used within the loop body
 ]
 
-[tool.ruff.lint.flake8-tidy-imports]
-ban-relative-imports = "all"
-
-[tool.mypy]
-exclude = "tests"
-
-[[tool.mypy.overrides]]
-module = "transformers"
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-module = "torch"
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-module = "spacy.*"
-ignore_missing_imports = true
+[tool.coverage.run]
+branch = true
+omit = [
+    "install.py"
+]
 
 [tool.coverage.report]
 exclude_lines = [
