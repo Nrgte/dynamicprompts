@@ -1,3 +1,14 @@
+## Fork info
+
+$${"${variable_name}", "regex_search_string", "replacement_string"}
+
+replacement_string cannot be an empty string. It needs 1 character at least.
+
+### Other Features
+
+Also supports shared variables between the main prompt and ADetailer.
+
+
 # Stable Diffusion Dynamic Prompts extension
 A custom extension for [AUTOMATIC1111/stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui) that implements an expressive template language for random or combinatorial prompt generation along with features to support deep wildcard directory structures.
 
